@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  tarim-app:
+    build: .
+    container_name: tarim-app
+    ports:
+      - "4000:3001"
+      - "5174:5173"
+    environment:
+      - NODE_ENV=production
+      - DB_HOST=${DB_HOST:-mariadb}
+      - DB_PORT=${DB_PORT:-3306}
+      - DB_DATABASE=${DB_DATABASE:-tarimpro}
+      - DB_USERNAME=${DB_USERNAME:-root}
+      - DB_PASSWORD=${DB_PASSWORD:-root54}
+      - API_PORT=3001
+    external_links:
+      - mariadb:mariadb
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+networks:
+  app-network:
+    external: true
