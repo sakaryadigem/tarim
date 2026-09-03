@@ -35,6 +35,62 @@ CREATE TABLE IF NOT EXISTS users (
     ON UPDATE CASCADE ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS brands (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  name VARCHAR(120) NOT NULL,
+  description VARCHAR(255) NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_brands_name (name)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS products (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  brand_id INT UNSIGNED NULL,
+  name VARCHAR(180) NOT NULL,
+  category VARCHAR(100) NOT NULL DEFAULT 'Yedek Parça',
+  sku VARCHAR(60) NULL,
+  unit_price DECIMAL(12,2) NOT NULL DEFAULT 0,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_products_sku (sku),
+  KEY idx_products_brand (brand_id),
+  CONSTRAINT fk_products_brand FOREIGN KEY (brand_id) REFERENCES brands (id)
+    ON UPDATE CASCADE ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS warehouses (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  branch_id INT UNSIGNED NULL,
+  name VARCHAR(120) NOT NULL,
+  city VARCHAR(80) NOT NULL,
+  capacity INT UNSIGNED NOT NULL DEFAULT 0,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_warehouses_name (name),
+  KEY idx_warehouses_branch (branch_id),
+  CONSTRAINT fk_warehouses_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
+    ON UPDATE CASCADE ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS stock_levels (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  product_id INT UNSIGNED NOT NULL,
+  warehouse_id INT UNSIGNED NOT NULL,
+  quantity INT NOT NULL DEFAULT 0,
+  minimum_quantity INT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_stock_product_warehouse (product_id, warehouse_id),
+  CONSTRAINT fk_stock_product FOREIGN KEY (product_id) REFERENCES products (id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_stock_warehouse FOREIGN KEY (warehouse_id) REFERENCES warehouses (id)
+    ON UPDATE CASCADE ON DELETE CASCADE
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS customers (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT,
   branch_id INT UNSIGNED NULL,
@@ -126,6 +182,20 @@ CREATE TABLE IF NOT EXISTS complaint_requests (
     ON UPDATE CASCADE ON DELETE SET NULL,
   CONSTRAINT fk_complaint_requests_assigned_to FOREIGN KEY (assigned_to) REFERENCES users (id)
     ON UPDATE CASCADE ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- ================================================================
+-- YAPAY ZEKA CHAT GEÇMİŞİ
+-- ================================================================
+CREATE TABLE IF NOT EXISTS chatbot_history (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  conversation_id VARCHAR(80) NOT NULL,
+  role ENUM('user','assistant') NOT NULL,
+  message TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_chatbot_history_conversation (conversation_id),
+  KEY idx_chatbot_history_created (created_at)
 ) ENGINE=InnoDB;
 
 -- Mevcut kurulumlarda yeni teklif alanlarını da ekle.
@@ -279,6 +349,27 @@ INSERT INTO field_job_images (field_job_id, image_url, caption, sort_order) VALU
   (3, 'https://images.unsplash.com/photo-1586528116493-da8b0f0c7f43?auto=format&fit=crop&w=1200&q=80', 'Teslimat görseli', 1),
   (8, 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=1200&q=80', 'Kurulum alanı', 1),
   (13, 'https://images.unsplash.com/photo-1592982537447-7440770cbfc9?auto=format&fit=crop&w=1200&q=80', 'Teslim edilecek makine', 1);
+
+INSERT IGNORE INTO brands (id, name, description) VALUES
+  (1, 'Massey Ferguson', 'Traktör ve tarım makineleri'),
+  (2, 'John Deere', 'Tarım makineleri ve ekipmanları'),
+  (3, 'New Holland', 'Tarım makineleri ve yedek parçaları');
+
+INSERT IGNORE INTO products (id, brand_id, name, category, sku, unit_price) VALUES
+  (1, 1, 'Massey Ferguson 5710S', 'Traktör', 'MF-5710S', 84500.00),
+  (2, 2, 'John Deere 5075E', 'Traktör', 'JD-5075E', 56200.00),
+  (3, 1, 'Hidrolik Pompa - 3226', 'Yedek Parça', 'MF-HP-3226', 12850.00),
+  (4, 2, 'Debriyaj Seti - 8450', 'Yedek Parça', 'JD-DS-8450', 8460.00),
+  (5, 3, 'Yağ Filtresi - 2656', 'Yedek Parça', 'NH-YF-2656', 950.00);
+
+INSERT IGNORE INTO warehouses (id, branch_id, name, city, capacity) VALUES
+  (1, 1, 'Merkez Depo', 'Konya', 5000),
+  (2, 2, 'Ankara Depo', 'Ankara', 3000),
+  (3, 1, 'Yedek Parça Deposu', 'Konya', 1800);
+
+INSERT IGNORE INTO stock_levels (product_id, warehouse_id, quantity, minimum_quantity) VALUES
+  (1, 1, 3, 2), (2, 1, 2, 2), (3, 1, 24, 10),
+  (4, 1, 8, 10), (5, 2, 14, 20), (3, 3, 12, 8);
 
 -- ================================================================
 -- ANALİZ & RAPORLAMA

@@ -15,11 +15,11 @@ FROM node:20-alpine
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci
 
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/server.mjs ./
 
-EXPOSE 3001 5173
+EXPOSE 3001
 
 CMD ["node", "server.mjs"]

@@ -4,7 +4,7 @@ import {
   Activity, AlertCircle, ArrowDownRight, ArrowUpRight, BarChart3, Bell, Bot, Boxes, Building2, ChevronDown, ChevronRight,
   ClipboardCheck, ClipboardList, Clock3, Cog, Crown, FileText, Gauge, Headphones, LayoutDashboard, Mail, MapPin,
   Menu, MoreHorizontal, Package, Play, Plus, Search, Settings, ShieldCheck, ShoppingCart, SlidersHorizontal, Truck,
-  Users, Wrench, X, CheckCircle2, RotateCcw, ImageIcon, Share2
+  Users, Wrench, X, CheckCircle2, RotateCcw, ImageIcon, Share2, Send, Database
 } from 'lucide-react'
 import './styles.css'
 
@@ -174,9 +174,91 @@ function SocialMediaAgentView() {
 }
 
 const aiAgents = [
+  { key: 'Veritabanı Asistanı Chatbot', description: 'Yalnızca mevcut TarımPro verilerini kullanarak sorularınızı yanıtlar; kayıt bulunamazsa onayınızla talep oluşturur.', category: 'Destek Operasyonları', icon: Bot },
   { key: 'Teklif Kontrolü AI Ajanı', description: 'Teklifleri tolerans bilgileriyle karşılaştırır; onay veya red sonucuna göre veritabanı aksiyonunu başlatır.', category: 'Satış Operasyonları', icon: ClipboardCheck },
   { key: 'Sosyal Medya İçeriği Üret', description: 'Promptunuzu analiz ederek farklı sosyal medya kanalları için metin, durum, video senaryosu veya görsel üretim taslağı hazırlar.', category: 'Pazarlama Operasyonları', icon: ImageIcon },
 ]
+
+type ChatMessage = { role: 'user' | 'assistant'; text: string; requestOffer?: boolean; requestCreated?: string }
+type ChatHistoryItem = { id: number; conversationId: string; role: 'user' | 'assistant'; message: string; createdAt: string }
+type ChatSession = { id: string; title: string; createdAt: string }
+
+const readApiResponse = async (response: Response) => {
+  const raw = await response.text()
+  let data: any = {}
+  try { data = raw ? JSON.parse(raw) : {} } catch { throw new Error(`Sunucudan geçersiz yanıt alındı (${response.status}).`) }
+  if (!response.ok) throw new Error(data.error || `Sunucu hatası (${response.status}).`)
+  return data
+}
+
+function DatabaseChatbotView() {
+  const [conversationId, setConversationId] = useState<string>(() => crypto.randomUUID())
+  const [messages, setMessages] = useState<ChatMessage[]>([{ role: 'assistant', text: 'Merhaba! TarımPro veritabanındaki müşteriler, siparişler, saha işleri ve talepler hakkında soru sorabilirsiniz.' }])
+  const [history, setHistory] = useState<ChatHistoryItem[]>([])
+  const [sessions, setSessions] = useState<ChatSession[]>([])
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [input, setInput] = useState('')
+  const [pendingQuestion, setPendingQuestion] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    fetch('/api/chatbot/history').then(readApiResponse).then((data: ChatHistoryItem[]) => {
+      const loaded = [...data].reverse()
+      const grouped = new Map<string, ChatHistoryItem[]>()
+      loaded.forEach(item => grouped.set(item.conversationId, [...(grouped.get(item.conversationId) || []), item]))
+      setSessions([...grouped.entries()].reverse().map(([id, items]) => ({ id, title: items.find(item => item.role === 'user')?.message || 'Yeni konuşma', createdAt: items[0].createdAt })))
+      const current = loaded.filter(item => item.conversationId === conversationId)
+      setHistory(current)
+      if (current.length) setMessages(current.map(item => ({ role: item.role, text: item.message })))
+    }).catch(() => undefined)
+  }, [conversationId])
+
+  const startNewSession = () => {
+    const nextId = crypto.randomUUID()
+    setConversationId(nextId)
+    setMessages([{ role: 'assistant', text: 'Yeni konuşma başlatıldı. TarımPro veritabanı hakkında nasıl yardımcı olabilirim?' }])
+    setHistory([]); setPendingQuestion(''); setInput('')
+  }
+
+  const openSession = async (sessionId: string) => {
+    const data = await fetch(`/api/chatbot/history?conversationId=${encodeURIComponent(sessionId)}`).then(readApiResponse) as ChatHistoryItem[]
+    const loaded = [...data].reverse()
+    setConversationId(sessionId); setHistory(loaded); setMessages(loaded.map(item => ({ role: item.role, text: item.message }))); setHistoryOpen(false)
+  }
+
+  const ask = async (event: { preventDefault: () => void }) => {
+    event.preventDefault()
+    const question = input.trim()
+    if (!question || loading) return
+    setInput(''); setError(''); setLoading(true)
+    const next = [...messages, { role: 'user' as const, text: question }]
+    setMessages(next)
+    try {
+      const response = await fetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: question, conversationId, history: next.slice(-10).map(({ role, text }) => ({ role: role === 'assistant' ? 'model' : role, parts: [{ text }] })) }) })
+      const data = await readApiResponse(response)
+      setMessages(current => [...current, { role: 'assistant', text: data.text, requestOffer: data.requestOffer }])
+      setHistory(current => [...current, { id: Date.now(), conversationId, role: 'user', message: question, createdAt: new Date().toISOString() }, { id: Date.now() + 1, conversationId, role: 'assistant', message: data.text, createdAt: new Date().toISOString() }])
+      setSessions(current => current.some(session => session.id === conversationId) ? current : [{ id: conversationId, title: question, createdAt: new Date().toISOString() }, ...current])
+      if (data.requestOffer) setPendingQuestion(question)
+    } catch (err) { setError(err instanceof Error ? err.message : 'Chatbot bağlantısı kurulamadı.') }
+    finally { setLoading(false) }
+  }
+
+  const createRequest = async () => {
+    if (!pendingQuestion) return
+    setLoading(true); setError('')
+    try {
+      const response = await fetch('/api/chatbot/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: pendingQuestion }) })
+      const data = await readApiResponse(response)
+      setMessages(current => [...current, { role: 'assistant', text: `Talebiniz oluşturuldu. Talep numarası: ${data.requestCode}`, requestCreated: data.requestCode }])
+      setPendingQuestion('')
+    } catch (err) { setError(err instanceof Error ? err.message : 'Talep oluşturulamadı.') }
+    finally { setLoading(false) }
+  }
+
+  return <div className="chatbot-layout"><section className="chatbot-card panel"><div className="chatbot-session-bar"><b>Aktif konuşma</b><button className="new-chat-button" onClick={startNewSession}><Plus size={14}/> Yeni konuşma</button></div><div className="chatbot-messages">{messages.map((message, index) => <div key={`${message.role}-${index}`} className={`chat-message ${message.role}`}><div className="chat-avatar">{message.role === 'assistant' ? <Bot size={17}/> : 'SA'}</div><div className="chat-bubble"><div className="chat-text">{message.text}</div>{message.requestOffer && pendingQuestion && <button className="request-button" onClick={createRequest} disabled={loading}><ClipboardList size={15}/> Evet, talep oluştur</button>}</div></div>)}{loading && <div className="chat-message assistant"><div className="chat-avatar"><Bot size={17}/></div><div className="chat-bubble typing">Yanıt hazırlanıyor…</div></div>}</div><form className="chatbot-form" onSubmit={ask}><textarea value={input} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void ask(event) } }} placeholder="Veritabanına bir soru sorun…" rows={1} /><button className="primary" type="submit" disabled={loading || !input.trim()} aria-label="Gönder"><Send size={17}/></button></form>{error && <div className="db-warning">{error}</div>}<div className="chat-history"><button className="chat-history-toggle" onClick={() => setHistoryOpen(open => !open)}><Clock3 size={15}/> Ayrı konuşmalar ({sessions.length})<ChevronDown size={15}/></button>{historyOpen && <div className="chat-history-list">{sessions.length === 0 ? <span>Henüz kayıtlı konuşma yok.</span> : sessions.map(session => <button key={session.id} className={session.id === conversationId ? 'chat-session selected' : 'chat-session'} onClick={() => void openSession(session.id)}><b>{session.title}</b><small>{new Date(session.createdAt).toLocaleString('tr-TR')}</small></button>)}</div>}</div></section><aside className="chatbot-info panel"><div className="chatbot-info-icon"><Database size={22}/></div><h3>Güvenli veri yanıtı</h3><p>Bu asistan yalnızca sunucuda okunan mevcut veritabanı kayıtlarını bağlam olarak kullanır.</p><div className="chatbot-rule"><CheckCircle2 size={15}/> Kayıt yoksa tahmin yapmaz</div><div className="chatbot-rule"><CheckCircle2 size={15}/> Onay olmadan talep açmaz</div><div className="chatbot-rule"><CheckCircle2 size={15}/> API anahtarı tarayıcıya gönderilmez</div></aside></div>
+}
 
 function AIAgentsView() {
   const [selectedKey, setSelectedKey] = useState(aiAgents[0].key)
@@ -184,7 +266,7 @@ function AIAgentsView() {
   const AgentIcon = selected.icon
   return <>
     <div className="module-heading"><div><div className="eyebrow"><span className="live-dot" /> YAPAY ZEKA MERKEZİ</div><h1>Yapay Zeka Ajanları</h1><p>İş süreçlerinizi otomatikleştiren ajanları tek merkezden çalıştırın ve yönetin.</p></div></div>
-    <div className="reports-layout"><section className="panel report-list"><div className="report-list-head"><h2>Ajanlar</h2><span>{aiAgents.length} aktif ajan</span></div>{aiAgents.map(agent => { const ItemIcon = agent.icon; return <button key={agent.key} className={selected.key === agent.key ? 'report-item selected' : 'report-item'} onClick={() => setSelectedKey(agent.key)}><div className="report-icon"><ItemIcon size={16}/></div><div><b>{agent.key}</b><span>{agent.category}</span></div><ChevronRight size={15}/></button> })}</section><section className="panel report-content"><div className="report-content-head"><div><div className="eyebrow">{selected.category.toUpperCase()}</div><h2><AgentIcon size={22}/> {selected.key}</h2><p>{selected.description}</p></div><span className="view-badge">AKTİF AJAN</span></div>{selected.key === 'Sosyal Medya İçeriği Üret' ? <SocialMediaAgentView /> : <OfferAgentView />}</section></div>
+    <div className="reports-layout"><section className="panel report-list"><div className="report-list-head"><h2>Ajanlar</h2><span>{aiAgents.length} aktif ajan</span></div>{aiAgents.map(agent => { const ItemIcon = agent.icon; return <button key={agent.key} className={selected.key === agent.key ? 'report-item selected' : 'report-item'} onClick={() => setSelectedKey(agent.key)}><div className="report-icon"><ItemIcon size={16}/></div><div><b>{agent.key}</b><span>{agent.category}</span></div><ChevronRight size={15}/></button> })}</section><section className="panel report-content"><div className="report-content-head"><div><div className="eyebrow">{selected.category.toUpperCase()}</div><h2><AgentIcon size={22}/> {selected.key}</h2><p>{selected.description}</p></div><span className="view-badge">AKTİF AJAN</span></div>{selected.key === 'Veritabanı Asistanı Chatbot' ? <DatabaseChatbotView /> : selected.key === 'Sosyal Medya İçeriği Üret' ? <SocialMediaAgentView /> : <OfferAgentView />}</section></div>
   </>
 }
 
@@ -232,6 +314,21 @@ function ModuleView({ name, search, onAdd }: { name: string; search: string; onA
   </>
 }
 
+const dbModuleEndpoints: Record<string, string> = {
+  'Markalar': '/api/brands', 'Ürünler': '/api/products', 'Stok Takibi': '/api/stock',
+  'Şubeler': '/api/branches', 'Depolar': '/api/warehouses', 'Kullanıcı Yönetimi': '/api/users'
+}
+
+function DbModuleView({ name, search }: { name: string; search: string }) {
+  const [rows, setRows] = useState<Record<string, unknown>[]>([])
+  const [error, setError] = useState('')
+  useEffect(() => { setError(''); fetch(dbModuleEndpoints[name]).then(response => { if (!response.ok) throw new Error(); return response.json() }).then(setRows).catch(() => setError(`${name} verileri veritabanından yüklenemedi.`)) }, [name])
+  const filtered = rows.filter(row => Object.values(row).join(' ').toLocaleLowerCase('tr-TR').includes(search.toLocaleLowerCase('tr-TR')))
+  const columns = rows[0] ? Object.keys(rows[0]) : []
+  const labels: Record<string, string> = { id: 'ID', name: 'AD', fullName: 'KULLANICI', brand: 'MARKA', category: 'KATEGORİ', product: 'ÜRÜN', productCount: 'ÜRÜN SAYISI', warehouse: 'DEPO', city: 'KONUM', phone: 'TELEFON', email: 'E-POSTA', price: 'FİYAT', stock: 'STOK', quantity: 'MEVCUT', minimumQuantity: 'MİNİMUM', capacity: 'KAPASİTE', role: 'ROL', status: 'DURUM' }
+  return <><div className="module-heading"><div><div className="eyebrow"><span className="live-dot"/> VERİTABANI MODÜLÜ</div><h1>{name}</h1><p>{name} kayıtları doğrudan veritabanından yüklenir.</p>{error && <div className="db-warning">{error}</div>}</div></div><section className="module-stats"><div className="module-stat"><span>Toplam kayıt</span><strong>{rows.length}</strong><small><ArrowUpRight size={13}/> Veritabanı</small></div><div className="module-stat"><span>Aktif kayıt</span><strong>{rows.filter(row => row.status === 'Aktif' || row.status === 'Yeterli').length}</strong><small><ArrowUpRight size={13}/> Güncel veri</small></div><div className="module-stat"><span>Gösterilen</span><strong>{filtered.length}</strong><small><ArrowUpRight size={13}/> Arama sonucu</small></div></section><section className="panel module-table"><div className="module-toolbar"><div><h2>{name} kayıtları</h2><p>{filtered.length} kayıt gösteriliyor</p></div></div><div className="table-wrap"><table><thead><tr>{columns.map(column => <th key={column}>{labels[column] || column.replace(/_/g, ' ').toUpperCase()}</th>)}</tr></thead><tbody>{filtered.map((row, index) => <tr key={String(row.id ?? index)}>{columns.map(column => <td key={column}>{column === 'status' ? <span className="status green"><i/> {String(row[column] ?? '—')}</span> : String(row[column] ?? '—')}</td>)}</tr>)}{filtered.length === 0 && <tr><td colSpan={Math.max(columns.length, 1)} className="empty-state">Veritabanında kayıt bulunamadı.</td></tr>}</tbody></table></div></section><div className="module-tip"><Database size={18}/><div><b>Canlı veritabanı bağlantısı</b><span>Bu modülün listesi {dbModuleEndpoints[name]} endpoint'i üzerinden yüklenir.</span></div></div></>
+}
+
 function App() {
   const [active, setActive] = useState('Genel Bakış')
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -259,7 +356,7 @@ function App() {
           <section className="panel quick-panel"><div className="panel-head"><div><h2>Hızlı işlemler</h2><p>Sık kullandığınız işlemler</p></div></div><div className="quick-grid">{[[Package,'Ürün ekle','Yeni ürün tanımla'],[ShoppingCart,'Sipariş oluştur','Yeni satış kaydı'],[Wrench,'Servis kaydı','Tamir / bakım ekle'],[ClipboardCheck,'Teklif oluştur','Müşteriye teklif hazırla']].map(([I, title, sub]) => { const Q = I as Icon; return <button key={title as string} onClick={() => setNotice(true)}><div className="quick-icon"><Q size={19}/></div><div><b>{title as string}</b><span>{sub as string}</span></div><ChevronRight size={16}/></button> })}</div><div className="task-summary"><div className="ring">72%</div><div><b>Günlük görevler</b><span>18 / 25 görev tamamlandı</span></div><ChevronRight size={16}/></div></section>
         </div>
         <div className="lower-grid"><section className="panel table-panel"><div className="panel-head"><div><h2>Son siparişler</h2><p>Son gerçekleşen satış işlemleri</p></div><button className="text-btn" onClick={() => setActive('Siparişler')}>Tümünü gör <ChevronRight size={15}/></button></div><div className="table-wrap"><table><thead><tr><th>SİPARİŞ NO</th><th>MÜŞTERİ</th><th>ÜRÜN</th><th>TARİH</th><th>TUTAR</th><th>DURUM</th></tr></thead><tbody>{orders.filter(o => Object.values(o).some(v => v.toLowerCase().includes(search.toLowerCase()))).map(o => <tr key={o.id}><td><b className="order-id">{o.id}</b></td><td>{o.customer}</td><td>{o.product}</td><td className="muted">{o.date}</td><td><b>{o.total}</b></td><td><span className={'status ' + o.tone}><i/> {o.status}</span></td></tr>)}</tbody></table></div></section><section className="panel stock-panel"><div className="panel-head"><div><h2>Stok durumu</h2><p>Depolardaki kritik ürünler</p></div><button className="filter-btn"><SlidersHorizontal size={15}/></button></div><div className="warehouse"><div className="warehouse-icon"><Building2 size={18}/></div><div><b>Merkez Depo</b><span>284 farklı ürün</span></div><strong>78%</strong></div><div className="progress"><span style={{width:'78%'}}/></div><div className="stock-alert"><AlertCircle size={18}/><div><b>12 ürün kritik seviyede</b><span>Yeniden sipariş vermeyi unutmayın.</span></div><ChevronRight size={16}/></div><div className="last-sync"><Clock3 size={14}/> Son güncelleme: 2 dk önce</div></section></div>
-        <div className="bottom-strip"><div><Activity size={17}/><b>Operasyon özeti</b><span>Bugün 14 saha işi planlandı</span></div><div><MapPin size={17}/><b>Saha ekibi</b><span>8 ekip aktif görevde</span></div><div><CheckCircle2 size={17}/><b>Memnuniyet</b><span>4,8 / 5,0 müşteri puanı</span></div></div></> : active === 'Siparişler' ? <OrdersView search={search} /> : active === 'Şikayet-Talep' ? <ComplaintsView search={search} /> : active === 'Saha İşleri' ? <FieldJobsView search={search} /> : active === 'Analiz & Raporlama' ? <ReportsView /> : active === 'Yapay Zeka Ajanları' ? <AIAgentsView /> : <ModuleView name={active} search={search} onAdd={() => setNotice(true)} />}</div>
+        <div className="bottom-strip"><div><Activity size={17}/><b>Operasyon özeti</b><span>Bugün 14 saha işi planlandı</span></div><div><MapPin size={17}/><b>Saha ekibi</b><span>8 ekip aktif görevde</span></div><div><CheckCircle2 size={17}/><b>Memnuniyet</b><span>4,8 / 5,0 müşteri puanı</span></div></div></> : active === 'Siparişler' ? <OrdersView search={search} /> : active === 'Şikayet-Talep' ? <ComplaintsView search={search} /> : active === 'Saha İşleri' ? <FieldJobsView search={search} /> : active === 'Analiz & Raporlama' ? <ReportsView /> : active === 'Yapay Zeka Ajanları' ? <AIAgentsView /> : dbModuleEndpoints[active] ? <DbModuleView name={active} search={search} /> : <ModuleView name={active} search={search} onAdd={() => setNotice(true)} />}</div>
     </main>
   </div>
 }
